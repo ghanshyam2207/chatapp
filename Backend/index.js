@@ -32,8 +32,13 @@ io.on("connection", (socket) => {
   socket.on("stop_typing", (data) => {
     socket.broadcast.emit("stop_typing", data);
   });
+
+  socket.on("delete_message", (data) => {
+    socket.broadcast.emit("delete_message", data);
+  });
 });
 
-server.listen(3001, () => {
-  console.log("Server running on port 3001");
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });

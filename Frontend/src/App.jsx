@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { io } from "socket.io-client";
 
-const socket = io("http://localhost:3001");
+const socket = io("https://chatapp-xkma.onrender.com");
 
 const INITIAL_USERS = [
   { id: 1, name: "Rahul Tiwari", avatar: "https://i.pravatar.cc/150?img=11", isOnline: true },
@@ -10,12 +10,14 @@ const INITIAL_USERS = [
   { id: 4, name: "Priya Sharma", avatar: "https://i.pravatar.cc/150?img=9", isOnline: false }
 ];
 
+const EMOJIS = ['😀', '😂', '🤣', '😊', '😍', '😎', '🙏', '👍', '🔥', '❤️', '🎉', '😡', '🤔', '🙌', '😘'];
+
 export default function ChatUI() {
   const [messagesData, setMessagesData] = useState({
-    1: [{ text: "Hello bhai, kaisa hai?", time: "05:30 PM", sender: "other", read: true }],
-    2: [{ text: "Thanks!", time: "02:15 PM", sender: "other", read: true }],
-    3: [{ text: "Kya chal raha hai?", time: "09:00 AM", sender: "other", read: true }],
-    4: [{ text: "See you later", time: "Yesterday", sender: "other", read: true }]
+    1: [{ id: "m1", text: "Hello bhai, kaisa hai?", time: "05:30 PM", sender: "other", read: true }],
+    2: [{ id: "m2", text: "Thanks!", time: "02:15 PM", sender: "other", read: true }],
+    3: [{ id: "m3", text: "Kya chal raha hai?", time: "09:00 AM", sender: "other", read: true }],
+    4: [{ id: "m4", text: "See you later", time: "Yesterday", sender: "other", read: true }]
   });
 
   const [unreadCounts, setUnreadCounts] = useState({ 1: 0, 2: 0, 3: 0, 4: 0 });
@@ -23,6 +25,8 @@ export default function ChatUI() {
   const [typingUsers, setTypingUsers] = useState({});
   const [activeUserId, setActiveUserId] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showDropdownFor, setShowDropdownFor] = useState(null);
 
   const messagesEndRef = useRef(null);
   let typingTimeout = useRef(null);
@@ -38,7 +42,6 @@ export default function ChatUI() {
         [data.roomId]: [...(prev[data.roomId] || []), { ...data, read: true }]
       }));
 
-      // If we receive a message for a user we are not currently viewing, increment unread badge
       if (data.roomId !== activeUserId) {
         setUnreadCounts(prev => ({ ...prev, [data.roomId]: prev[data.roomId] + 1 }));
       }
@@ -52,10 +55,24 @@ export default function ChatUI() {
       setTypingUsers(prev => ({ ...prev, [data.roomId]: false }));
     });
 
+    // Receive message deletion request
+    socket.on("delete_message", (data) => {
+      setMessagesData((prev) => {
+        const roomMessages = prev[data.roomId] || [];
+        return {
+          ...prev,
+          [data.roomId]: roomMessages.map(msg =>
+            msg.id === data.messageId ? { ...msg, text: "🚫 This message was deleted", isDeleted: true } : msg
+          )
+        };
+      });
+    });
+
     return () => {
       socket.off("receive_message");
       socket.off("typing");
       socket.off("stop_typing");
+      socket.off("delete_message");
     };
   }, [activeUserId]);
 
@@ -68,7 +85,6 @@ export default function ChatUI() {
   }, [activeMessages, isTyping]);
 
   useEffect(() => {
-    // Reset unread count when switching to a user
     if (unreadCounts[activeUserId] > 0) {
       setUnreadCounts(prev => ({ ...prev, [activeUserId]: 0 }));
     }
@@ -84,17 +100,41 @@ export default function ChatUI() {
     }, 1500);
   };
 
+  const addEmoji = (emoji) => {
+    setInput(prev => prev + emoji);
+    setShowEmojiPicker(false);
+  };
+
+  const deleteMessage = (messageId) => {
+    setMessagesData((prev) => {
+      const roomMessages = prev[activeUserId] || [];
+      return {
+        ...prev,
+        [activeUserId]: roomMessages.map(msg =>
+          msg.id === messageId ? { ...msg, text: "🚫 You deleted this message", isDeleted: true } : msg
+        )
+      };
+    });
+
+    socket.emit("delete_message", { roomId: activeUserId, messageId });
+    setShowDropdownFor(null);
+  };
+
   const sendMessage = (e) => {
     e.preventDefault();
     if (!input.trim()) return;
 
     const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const newMsgId = "msg_" + Date.now() + Math.random().toString(36).substr(2, 5);
+
     const messageData = {
+      id: newMsgId,
       text: input,
       time: currentTime,
       sender: "me",
       roomId: activeUserId,
-      read: true // Simulated instant read receipt for UI
+      read: true,
+      isDeleted: false
     };
 
     setMessagesData((prev) => ({
@@ -102,19 +142,25 @@ export default function ChatUI() {
       [activeUserId]: [...(prev[activeUserId] || []), messageData]
     }));
 
-    // Send context including roomId so other clients know who sent it
     socket.emit("send_message", { ...messageData, sender: "other" });
     socket.emit("stop_typing", { roomId: activeUserId });
     setInput("");
+    setShowEmojiPicker(false);
   };
 
   const filteredUsers = INITIAL_USERS.filter(u => u.name.toLowerCase().includes(searchQuery.toLowerCase()));
 
+  // Utility to handle clicks outside message dropdown
+  useEffect(() => {
+    const handleClickOutside = () => setShowDropdownFor(null);
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
+  }, []);
+
   return (
-    <div className="flex h-screen bg-gray-50 font-sans text-gray-800">
+    <div className="flex h-screen bg-gray-50 font-sans text-gray-800 focus:outline-none">
       {/* Sidebar - Users List */}
       <div className="w-[400px] min-w-[300px] bg-white border-r border-gray-200 hidden md:flex flex-col shadow-sm z-10">
-        {/* Profile Ribbon */}
         <div className="h-16 px-4 bg-[#f0f2f5] flex items-center justify-between border-b border-gray-200">
           <div className="w-10 h-10 rounded-full overflow-hidden shadow-sm border border-gray-300 cursor-pointer">
             <img src="https://i.pravatar.cc/150?img=68" alt="my-dp" className="w-full h-full object-cover" />
@@ -164,11 +210,11 @@ export default function ChatUI() {
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <p className={`text-[14px] truncate pr-4 ${isTargetTyping ? "text-[#00a884] font-medium" : "text-[#667781]"}`}>
+                    <p className={`text-[14px] truncate pr-4 ${isTargetTyping ? "text-[#00a884] font-medium" : "text-[#667781]"} ${lastMsg?.isDeleted ? 'italic text-gray-400' : ''}`}>
                       {isTargetTyping ? "typing..." : lastMsg ? (
                         <span className="flex items-center gap-1">
-                          {lastMsg.sender === "me" && (
-                            <svg xmlns="http://www.w3.org/2000/svg" className={`h-[15px] w-[15px] ${lastMsg.read ? 'text-[#53bdeb]' : 'text-gray-400'}`} viewBox="0 0 20 20" fill="currentColor">
+                          {lastMsg.sender === "me" && !lastMsg.isDeleted && (
+                            <svg xmlns="http://www.w3.org/2000/svg" className={`h-[15px] w-[15px] flex-shrink-0 ${lastMsg.read ? 'text-[#53bdeb]' : 'text-gray-400'}`} viewBox="0 0 20 20" fill="currentColor">
                               <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                             </svg>
                           )}
@@ -223,11 +269,10 @@ export default function ChatUI() {
             </span>
           </div>
 
-          {/* Encryption Notice */}
           <div className="flex justify-center mb-5">
             <div className="bg-[#ffeecd] text-[#54656f] text-[12.5px] py-1.5 px-4 rounded-lg shadow-sm text-center max-w-sm flex items-center justify-center gap-2">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" /></svg>
-              <p>Messages and calls are end-to-end encrypted.</p>
+              <p>Messages are end-to-end encrypted. No one outside can read them.</p>
             </div>
           </div>
 
@@ -235,15 +280,42 @@ export default function ChatUI() {
             const isFirstInGroup = i === 0 || activeMessages[i - 1].sender !== msg.sender;
             return (
               <div
-                key={i}
-                className={`flex gap-2 ${msg.sender === "me" ? "justify-end" : "justify-start"} ${isFirstInGroup ? "mt-3" : "mt-0.5"}`}
+                key={msg.id}
+                className={`flex gap-2 group/msg ${msg.sender === "me" ? "justify-end" : "justify-start"} ${isFirstInGroup ? "mt-3" : "mt-0.5"}`}
               >
-                <div className={`flex flex-col ${msg.sender === "me" ? "items-end" : "items-start"} max-w-[65%]`}>
+                {msg.sender === "other" && (
+                  <div className="w-8 h-8 rounded-full overflow-hidden mt-0 flex-shrink-0 shadow-sm border border-white">
+                    <img src={activeUser.avatar} alt="dp" className="w-full h-full object-cover" />
+                  </div>
+                )}
+
+                <div className={`flex flex-col ${msg.sender === "me" ? "items-end" : "items-start"} max-w-[65%] relative`}>
+
+                  {/* Dropdown menu arrow for my messages */}
+                  {msg.sender === "me" && !msg.isDeleted && (
+                    <div
+                      onClick={(e) => { e.stopPropagation(); setShowDropdownFor(msg.id === showDropdownFor ? null : msg.id); }}
+                      className="absolute right-1 top-2 bg-gradient-to-l from-[#d9fdd3] to-transparent pl-4 pr-1 z-20 cursor-pointer text-gray-500 opacity-0 group-hover/msg:opacity-100 transition-opacity"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                  )}
+
+                  {/* Context Menu Box */}
+                  {showDropdownFor === msg.id && (
+                    <div className="absolute right-0 top-8 z-50 bg-white rounded-lg shadow-xl border border-gray-100 py-2 w-48 text-[15px] font-medium animate-fade-in-down">
+                      <div onClick={() => { }} className="px-4 py-2 hover:bg-gray-100 cursor-pointer">Reply</div>
+                      <div onClick={() => deleteMessage(msg.id)} className="px-4 py-2 hover:bg-gray-100 cursor-pointer text-red-500 hover:text-red-600">Delete message</div>
+                    </div>
+                  )}
+
                   <div
                     className={`px-2 pt-1.5 pb-2 shadow-sm relative text-[14.2px] inline-block ${msg.sender === "me"
                         ? `bg-[#d9fdd3] text-[#111b21] rounded-lg ${isFirstInGroup ? "rounded-tr-none" : ""}`
                         : `bg-white text-[#111b21] rounded-lg ${isFirstInGroup ? "rounded-tl-none" : ""}`
-                      }`}
+                      } ${msg.isDeleted ? 'italic text-gray-500 bg-opacity-70' : ''}`}
                     style={{ wordBreak: 'break-word', minWidth: '85px' }}
                   >
                     <p className="leading-snug pl-1 pr-16">{msg.text}</p>
@@ -251,7 +323,7 @@ export default function ChatUI() {
                       <span className="text-[10px] text-[#667781] leading-none">
                         {msg.time}
                       </span>
-                      {msg.sender === "me" && (
+                      {msg.sender === "me" && !msg.isDeleted && (
                         <svg xmlns="http://www.w3.org/2000/svg" className={`h-[15px] w-[15px] -ml-0.5 ${msg.read ? 'text-[#53bdeb]' : 'text-gray-400'}`} viewBox="0 0 20 20" fill="currentColor">
                           <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                         </svg>
@@ -263,9 +335,11 @@ export default function ChatUI() {
             )
           })}
 
-          {/* Typing Indicator */}
           {isTyping && (
             <div className="flex justify-start gap-2 transition-all duration-300 mt-3 relative">
+              <div className="w-8 h-8 rounded-full overflow-hidden mt-0 flex-shrink-0 shadow-sm border border-white">
+                <img src={activeUser.avatar} alt="dp" className="w-full h-full object-cover" />
+              </div>
               <div className="bg-white px-3 py-2.5 rounded-lg rounded-tl-none shadow-sm flex items-center justify-center gap-1.5 w-[65px] h-[38px] mb-2">
                 <span className="w-1.5 h-1.5 bg-[#8696a0] rounded-full animate-bounce [animation-delay:-0.3s]"></span>
                 <span className="w-1.5 h-1.5 bg-[#8696a0] rounded-full animate-bounce [animation-delay:-0.15s]"></span>
@@ -276,9 +350,31 @@ export default function ChatUI() {
           <div ref={messagesEndRef} />
         </div>
 
+        {/* Emoji Picker Box above input */}
+        {showEmojiPicker && (
+          <div className="absolute bottom-[66px] left-4 bg-white shadow-xl rounded-lg border border-gray-100 p-3 z-30 w-[300px] grid grid-cols-5 gap-2">
+            {EMOJIS.map((emoji, index) => (
+              <div
+                key={index}
+                onClick={() => addEmoji(emoji)}
+                className="text-2xl text-center cursor-pointer hover:bg-gray-100 rounded-md p-1 transition-colors"
+              >
+                {emoji}
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Input Area */}
         <div className="bg-[#f0f2f5] px-4 py-3 flex items-center gap-3 z-20 w-full min-h-[62px]">
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-[26px] w-[26px] text-[#54656f] cursor-pointer hover:text-[#3b474e] transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+          <svg
+            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+            xmlns="http://www.w3.org/2000/svg"
+            className={`h-[26px] w-[26px] cursor-pointer transition-colors ${showEmojiPicker ? 'text-[#00a884]' : 'text-[#54656f] hover:text-[#3b474e]'}`}
+            fill="none" viewBox="0 0 24 24" stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
           <svg xmlns="http://www.w3.org/2000/svg" className="h-[26px] w-[26px] text-[#54656f] cursor-pointer hover:text-[#3b474e] transition-colors hidden sm:block" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
 
           <form
@@ -288,6 +384,7 @@ export default function ChatUI() {
             <input
               value={input}
               onChange={handleTyping}
+              onFocus={() => setShowEmojiPicker(false)}
               className="w-full text-[15px] border-none outline-none text-[#111b21] placeholder-[#8696a0]"
               placeholder="Type a message"
               autoFocus
